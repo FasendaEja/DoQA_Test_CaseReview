@@ -38,7 +38,33 @@ pip install -r requirements.txt
 Также все параметры можно передать аргументами командной строки
 (`--base-url`, `--api-key`, `--openai-api-key`, `--model`, `--batch-size`).
 
-## Запуск
+## Запуск на Windows 10
+
+1. Установите Python 3.10+ с [python.org](https://www.python.org/downloads/windows/)
+   (на первом шаге установки отметьте **"Add Python to PATH"**).
+2. Откройте `cmd` или PowerShell и выполните в папке проекта:
+
+```bat
+cd C:\путь\к\проекту
+py -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+3. Создайте файл `.env` в папке проекта (см. `.env.example`) и заполните
+   `DOQA_BASE_URL`, `DOQA_API_KEY`, `OPENAI_API_KEY`.
+4. Поместите рядом файлы `DoQA_test_case_review_rules_.md` и `prompt.txt`.
+5. Запуск:
+
+```bat
+python doqa_review_util.py
+```
+
+Если вместо `python` команда не находится, используйте `py doqa_review_util.py`.
+Кириллица в консоли выводится корректно (утилита сама переключает поток вывода
+в UTF-8 на Windows; при желании можно дополнительно выполнить `chcp 65001`).
+
+## Запуск (Linux / macOS)
 
 Интерактивный режим (выбор режима и фильтров через меню):
 

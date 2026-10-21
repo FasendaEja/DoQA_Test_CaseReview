@@ -770,6 +770,14 @@ def make_output_filename(space_name: str, creators: list[dict],
 # Main
 # ===========================================================================
 def main():
+    # Корректный вывод кириллицы в консоли Windows (cmd/PowerShell)
+    if os.name == "nt":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     ap = argparse.ArgumentParser(description="ИИ-ревью тест-кейсов DoQA")
     ap.add_argument("--base-url", default=DEFAULT_DOQA_BASE_URL,
                     help="URL инстанса DoQA (или env DOQA_BASE_URL)")
