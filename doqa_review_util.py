@@ -163,6 +163,32 @@ class DoQAClient:
             page += 1
         return all_cases
 
+    # -- получение отдельного тест-кейса по id --------------------------------
+    def get_test_case(self, case_id) -> dict | None:
+        """Возвращает тест-кейс по его id или None, если не найден.
+
+        Пробует типовой REST DoQA: GET /api/testcase/{id}. Если ответ — объект
+        со списком, берётся первый элемент.
+        """
+        try:
+            payload = self._get(f"/api/testcase/{int(case_id)}")
+        except (RuntimeError, requests.RequestException):
+            return None
+        # Прямой объект кейса
+        if isinstance(payload, dict) and (payload.get("id") is not None
+                                          or "title" in payload or "steps" in payload):
+            return payload
+        items = self._extract_items(payload, "testCases", "items", "content")
+        if items:
+            first = items[0]
+            if isinstance(first, dict):
+                return first
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, dict):
+                return data
+        return None
+
 
 # ===========================================================================
 # Загрузка правил и промта
@@ -361,15 +387,95 @@ def choose_creators(users: list[dict]) -> tuple[list[dict], list[int]]:
 
 
 # ===========================================================================
+# Режим "ревью по списку ID"
+# ===========================================================================
+def parse_case_ids(text: str) -> list[int]:
+    """Разбирает строку/файл с id кейсов: числа через запятую, пробелы, ; или построчно."""
+    ids: list[int] = []
+    seen: set[int] = set()
+    for token in re.split(r"[,;\s]+", text):
+        token = token.strip()
+        if not token:
+            continue
+        if not token.isdigit():
+            raise ValueError(f"Некорректный id тест-кейса: '{token}'")
+        val = int(token)
+        if val not in seen:
+            seen.add(val)
+            ids.append(val)
+    return ids
+
+
+def read_case_ids_file(path: str) -> list[int]:
+    """Читает id из текстового файла (одна строка или построчно)."""
+    with open(path, encoding="utf-8-sig") as f:
+        return parse_case_ids(f.read())
+
+
+def collect_cases_by_ids(doa: DoQAClient, case_ids: list[int]) -> tuple[list[dict], list[int]]:
+    """Загружает кейсы по id. Возвращает (найденные кейсы, список ненайденных id)."""
+    found: list[dict] = []
+    missing: list[int] = []
+    for cid in case_ids:
+        tc = doa.get_test_case(cid)
+        if tc is None:
+            missing.append(cid)
+        else:
+            if tc.get("id") is None:
+                tc["id"] = cid
+            found.append(tc)
+    return found, missing
+
+
+def choose_case_ids_mode() -> list[int] | None:
+    """Интерактивно: вернуть список id, введённых пользователем, либо None (обычный режим)."""
+    print("\nДоступные режимы:")
+    print("  [1] Ревью по фильтрам (пространство, дата обновления, автор)")
+    print("  [2] Ревью конкретного списка кейсов по id")
+    while True:
+        sel = input("Выберите режим [1/2] (по умолчанию 1): ").strip() or "1"
+        if sel == "1":
+            return None
+        if sel == "2":
+            break
+        print("Некорректный ввод, попробуйте ещё раз.")
+    print("Введите id тест-кейсов через запятую/пробел (один id — тоже список),")
+    print("или путь к файлу со списком id, или 'q' для возврата в обычный режим:")
+    while True:
+        raw = input("> ").strip()
+        if raw.lower() == "q":
+            return None
+        if not raw:
+            print("Пустой ввод, попробуйте ещё раз.")
+            continue
+        try:
+            if os.path.isfile(raw):
+                ids = read_case_ids_file(raw)
+                print(f"Прочитано id из файла '{raw}': {ids}")
+            else:
+                ids = parse_case_ids(raw)
+            if ids:
+                return ids
+            print("Список пуст, попробуйте ещё раз.")
+        except ValueError as e:
+            print(f"Ошибка: {e}. Попробуйте ещё раз.")
+
+
+# ===========================================================================
 # 6. Формирование имени файла результата
 # ===========================================================================
-def make_output_filename(space_name: str, creators: list[dict]) -> str:
+def make_output_filename(space_name: str, creators: list[dict],
+                         case_ids: list[int] | None = None) -> str:
     now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    safe_space = re.sub(r'[\\/:*?"<>|]', "-", space_name)
+    if case_ids:
+        # Режим "список кейсов по id": в имени указываем сами id кейсов
+        authors = "кейсы_" + "_".join(str(i) for i in case_ids)
+        return f"Ревью{now} кейсов из пространства {safe_space} c автором {authors}.md"
     if creators:
         authors = "_".join(str(u["id"]) for u in creators)
     else:
         authors = "все авторы"
-    safe_space = re.sub(r'[\\/:*?"<>|]', "-", space_name)
     return f"Ревью{now} кейсов из пространства {safe_space} c автором {authors}.md"
 
 
@@ -396,6 +502,10 @@ def main():
     ap.add_argument("--creator-ids", help="creatorIds через запятую (для --non-interactive)")
     ap.add_argument("--updated-after", help="дата 'не раньше' ДД.ММ.ГГГГ (для --non-interactive)")
     ap.add_argument("--updated-before", help="дата 'не позже' ДД.ММ.ГГГГ (для --non-interactive)")
+    ap.add_argument("--case-ids",
+                    help="Ревью конкретного списка кейсов по id: "
+                         "числа через запятую/пробел ('123' или '123,456,789') "
+                         "или путь к файлу со списком id")
     args = ap.parse_args()
 
     if not args.base_url:
@@ -426,54 +536,112 @@ def main():
     users = doqa.get_users()
     print(f"      Найдено пользователей: {len(users)}")
 
-    # --- шаг 3: выбор фильтров ---------------------------------------------
-    if args.non_interactive:
-        space = next((p for p in projects if p["id"] == args.space_id), None)
-        if space is None:
-            print(f"Пространство с spaceId={args.space_id} не найдено.")
+    # --- выбор режима: по фильтрам или конкретный список кейсов по id ------
+    ids_from_args: list[int] | None = None
+    if args.case_ids:
+        try:
+            if os.path.isfile(args.case_ids):
+                ids_from_args = read_case_ids_file(args.case_ids)
+            else:
+                ids_from_args = parse_case_ids(args.case_ids)
+        except ValueError as e:
+            print(f"Ошибка разбора --case-ids: {e}")
             sys.exit(1)
-        cid_list = [int(x) for x in re.split(r"[,;]", args.creator_ids or "") if x.strip()]
-        creators = [u for u in users if u["id"] in cid_list]
-        upd_after, upd_before = args.updated_after, args.updated_before
+        if not ids_from_args:
+            print("Список id (--case-ids) пуст.")
+            sys.exit(1)
+
+    mode_ids = ids_from_args if ids_from_args is not None else (
+        None if args.non_interactive else choose_case_ids_mode())
+
+    if mode_ids is not None:
+        # ------- Режим "список кейсов по id": шаги 3-4 сводятся к выбору ----
+        # ------- пространства (для имени файла) и загрузки кейсов по id -----
+        if args.non_interactive or args.space_id:
+            space = next((p for p in projects if p["id"] == args.space_id), None)
+            if space is None:
+                print(f"Пространство с spaceId={args.space_id} не найдено.")
+                sys.exit(1)
+        elif len(projects) == 1:
+            space = projects[0]
+            print(f"\nПространство выбрано автоматически: '{space['name']}' (id={space['id']})")
+        else:
+            space = choose_space(projects)
+
+        creators, cid_list, upd_after, upd_before = [], [], None, None
+
+        print(f"\nРежим: ревью конкретного списка кейсов по id: {mode_ids}")
+        print(f"Пространство: '{space['name']}' (id={space['id']})")
+
+        print("[4/6] Получение тест-кейсов по id...")
+        cases, missing = collect_cases_by_ids(doa=doqa, case_ids=mode_ids)
+        if missing:
+            print(f"      ВНИМАНИЕ: не найдены кейсы с id: {missing}")
+        print(f"      Получено тест-кейсов: {len(cases)}")
+        if not cases:
+            print("Ни один кейс из списка не найден. Завершение.")
+            sys.exit(0)
+        out_case_ids = [tc.get("id") for tc in cases]
     else:
-        space = choose_space(projects)
-        upd_after, upd_before = choose_updated_dates()
-        creators, cid_list = choose_creators(users)
+        # ------- Обычный режим: ревью по фильтрам (шаги 3-4) ---------------
+        if args.non_interactive:
+            space = next((p for p in projects if p["id"] == args.space_id), None)
+            if space is None:
+                print(f"Пространство с spaceId={args.space_id} не найдено.")
+                sys.exit(1)
+            cid_list = [int(x) for x in re.split(r"[,;]", args.creator_ids or "") if x.strip()]
+            creators = [u for u in users if u["id"] in cid_list]
+            upd_after, upd_before = args.updated_after, args.updated_before
+        else:
+            space = choose_space(projects)
+            upd_after, upd_before = choose_updated_dates()
+            creators, cid_list = choose_creators(users)
 
-    print(f"\nФильтры: пространство='{space['name']}' (id={space['id']}), "
-          f"statuses={DEFAULT_STATUS_FILTER}, "
-          f"updatedDate: от {upd_after or '—'} до {upd_before or '—'}, "
-          f"creatorIds={cid_list or 'без фильтра'}")
+        print(f"\nФильтры: пространство='{space['name']}' (id={space['id']}), "
+              f"statuses={DEFAULT_STATUS_FILTER}, "
+              f"updatedDate: от {upd_after or '—'} до {upd_before or '—'}, "
+              f"creatorIds={cid_list or 'без фильтра'}")
 
-    # --- шаг 4: получение тест-кейсов --------------------------------------
-    print("[4/6] Получение списка тест-кейсов по фильтрам...")
-    cases = doqa.search_test_cases(
-        space_id=space["id"],
-        statuses=DEFAULT_STATUS_FILTER,
-        creator_ids=cid_list,
-        updated_after=upd_after,
-        updated_before=upd_before,
-    )
-    print(f"      Найдено тест-кейсов: {len(cases)}")
-    if not cases:
-        print("Нет кейсов по заданным фильтрам. Завершение.")
-        sys.exit(0)
+        # --- шаг 4: получение тест-кейсов ----------------------------------
+        print("[4/6] Получение списка тест-кейсов по фильтрам...")
+        cases = doqa.search_test_cases(
+            space_id=space["id"],
+            statuses=DEFAULT_STATUS_FILTER,
+            creator_ids=cid_list,
+            updated_after=upd_after,
+            updated_before=upd_before,
+        )
+        print(f"      Найдено тест-кейсов: {len(cases)}")
+        if not cases:
+            print("Нет кейсов по заданным фильтрам. Завершение.")
+            sys.exit(0)
+        out_case_ids = None
 
     # --- шаги 5-6: анализ ИИ и запись результата ---------------------------
     llm = LLMClient(args.openai_api_key, args.model, args.openai_base_url)
-    out_name = make_output_filename(space["name"], creators)
+    out_name = make_output_filename(space["name"], creators, case_ids=out_case_ids)
     print(f"[5/6] Анализ тест-кейсов с помощью ИИ (модель: {args.model})...")
 
     batches = [cases[i:i + args.batch_size] for i in range(0, len(cases), args.batch_size)]
     with open(out_name, "w", encoding="utf-8") as out:
+        if out_case_ids is not None:
+            mode_desc = (
+                f"- Режим: ревью конкретного списка кейсов по id: {out_case_ids}\n"
+                + (f"- Не найдены id: {missing}\n" if missing else "")
+            )
+        else:
+            mode_desc = (
+                f"- Статусы: {DEFAULT_STATUS_FILTER}\n"
+                f"- Дата обновления: от {upd_after or '—'} до {upd_before or '—'}\n"
+                f"- Авторы (creatorIds): "
+                + (", ".join("{} (id={})".format(u["name"], u["id"]) for u in creators) or "все")
+                + "\n"
+            )
         header = (
             f"# Ревью тест-кейсов\n\n"
             f"- Дата/время генерации: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n"
             f"- Пространство: {space['name']} (spaceId={space['id']})\n"
-            f"- Статусы: {DEFAULT_STATUS_FILTER}\n"
-            f"- Дата обновления: от {upd_after or '—'} до {upd_before or '—'}\n"
-            f"- Авторы (creatorIds): "
-            + (", ".join("{} (id={})".format(u["name"], u["id"]) for u in creators) or "все") + "\n"
+            f"{mode_desc}"
             f"- Файл правил: {rules_path}\n"
             f"- Количество кейсов: {len(cases)}\n\n---\n\n"
         )
