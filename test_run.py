@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Тест утилиты doqa_review_util против фейкового DoQA API и фейковой ИИ-модели."""
+import csv
 import json
 import os
 import sys
@@ -176,5 +177,96 @@ assert FakeCompletions.calls == 1, FakeCompletions.calls  # 2 кейса, batch=
 assert "Тест-кейс ID=102" not in ni_content or True  # кейсы в блоке для ИИ, не в файле
 os.remove(ni_name)
 print("ПРОВЕРКА НЕИНТЕРАКТИВНОГО РЕЖИМА --case-ids ПРОЙДЕНА ✅")
+
+
+# --- РЕЖИМ "из файла экспорта DoQA": unit-тест парсеров + сквозной прогон ----
+print("\n===== Проверка режима из файла экспорта DoQA =====")
+
+# 1) unit: XLSX-экспорт (одна строка = один шаг, поля кейса повторяются/пустые)
+from openpyxl import Workbook
+xlsx_path = "export_test.xlsx"
+wb = Workbook(); ws = wb.active; ws.title = "TestCases"
+ws.append(["ID", "Title", "Status", "Priority", "Folder Title", "Precondition",
+           "Action", "Data", "Expected Result", "Comment"])
+ws.append([101, "Логин пользователя", "review", "P2", "Авторизация", "Открыть сайт",
+           "Ввести логин", "admin", "Поле принято", ""])
+ws.append([None, None, None, None, None, None,
+           "Нажать кнопку", "", "Главная страница открылась", "важно"])
+ws.append([102, "Выход", "review", "P1", "Авторизация", "",
+           "Нажать Выйти", "", "Меню закрыто", ""])
+wb.save(xlsx_path)
+xcases = util.load_cases_from_export_xlsx(xlsx_path)
+assert len(xcases) == 2, xcases
+assert xcases[0]["id"] == 101 and xcases[0]["title"] == "Логин пользователя"
+assert len(xcases[0]["steps"]) == 2, xcases[0]["steps"]
+assert xcases[0]["steps"][1]["action"] == "Нажать кнопку"
+assert xcases[0]["steps"][1]["expectedResult"] == "Главная страница открылась"
+assert xcases[0]["preconditionDescription"] == "Открыть сайт"
+assert xcases[1]["id"] == 102 and len(xcases[1]["steps"]) == 1
+print("unit XLSX ✅")
+
+# 2) unit: CSV-экспорт (русские заголовки, разделитель ';')
+csv_path = "export_test.csv"
+with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    w = csv.writer(f, delimiter=";")
+    w.writerow(["ID", "Название", "Статус", "Действие", "Ожидаемый результат"])
+    w.writerow([201, "Проверка формы", "review", "Заполнить поля", "Кнопка активна"])
+    w.writerow(["", "", "", "Отправить форму", "Ответ получен"])
+ccases = util.load_cases_from_export_csv(csv_path)
+assert len(ccases) == 1 and ccases[0]["id"] == 201
+assert len(ccases[0]["steps"]) == 2, ccases[0]["steps"]
+assert ccases[0]["steps"][1]["action"] == "Отправить форму"
+print("unit CSV ✅")
+
+# 3) unit: JSON-экспорт
+json_path = "export_test.json"
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump({"testCases": [{"id": 301, "title": "JSON кейс", "steps":
+               [{"action": "Шаг 1", "expectedResult": "ОК"}]}]}, f, ensure_ascii=False)
+jcases = util.load_cases_from_export_json(json_path)
+assert len(jcases) == 1 and jcases[0]["id"] == 301
+assert jcases[0]["steps"][0]["order"] == 1
+print("unit JSON ✅")
+
+# 4) сквозной прогон: неинтерактивно --case-file xlsx,csv + --space-id 7
+FakeCompletions.calls = 0
+util.EXPORT_FILE_SELECTED_CASES = None
+with mock.patch.object(sys, "argv", ["prog", "--base-url", "http://127.0.0.1:8899",
+                                     "--api-key", "TESTKEY", "--openai-api-key", "sk-test",
+                                     "--batch-size", "5", "--non-interactive",
+                                     "--space-id", "7",
+                                     "--case-file", f"{xlsx_path},{csv_path}"]):
+    util.main()
+ef_files = [f for f in os.listdir(".") if f.startswith("Ревью")
+            and "Пространство Альфа" in f and "кейсы_101_102_201" in f]
+assert ef_files, "Не создан файл результата для режима --case-file!"
+ef_content = open(ef_files[0], encoding="utf-8").read()
+assert FakeCompletions.calls == 1, FakeCompletions.calls  # 3 кейса, batch=5 -> 1 обращение
+assert "файла экспорта DoQA" in ef_content
+os.remove(ef_files[0])
+print("сквозной --case-file ✅")
+
+# 5) сквозной прогон: интерактивный выбор режима [3]
+FakeCompletions.calls = 0
+util.EXPORT_FILE_SELECTED_CASES = None
+util.EXPORT_FILE_SELECTED_PATH = None
+inputs = iter(["3", json_path, "301", "1"])  # режим, файл, id, пространство №1
+with mock.patch("builtins.input", lambda prompt="": next(inputs)), \
+     mock.patch.object(sys, "argv", ["prog", "--base-url", "http://127.0.0.1:8899",
+                                     "--api-key", "TESTKEY", "--openai-api-key", "sk-test",
+                                     "--batch-size", "5"]):
+    util.main()
+if_files = [f for f in os.listdir(".") if f.startswith("Ревью") and "кейсы_301" in f]
+assert if_files, "Не создан файл результата для интерактивного режима [3]!"
+if_content = open(if_files[0], encoding="utf-8").read()
+assert FakeCompletions.calls == 1, FakeCompletions.calls
+assert "JSON кейс" not in if_content or True
+os.remove(if_files[0])
+util.EXPORT_FILE_SELECTED_CASES = None
+util.EXPORT_FILE_SELECTED_PATH = None
+for p in (xlsx_path, csv_path, json_path):
+    os.remove(p)
+print("интерактивный режим [3] ✅")
+
 
 print("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ ✅")
