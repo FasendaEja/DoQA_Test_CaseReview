@@ -17,9 +17,22 @@
  6) Результат ИИ сохраняется в файл вида:
     "Ревью<текущая дата и время> кейсов из пространства <пространство> c автором creatorIds"
 
+Интеграция с API DoQA (версия 4.3.1)
+------------------------------------
+Официальной публичной документации REST API DoQA 4.3.1 в открытых источниках нет
+(сайт разработчика dvision.ru не содержит документации), поэтому пути эндпоинтов
+в классе DoQAClient остаются типовыми и могут отличаться в конкретном инстансе.
+Чтобы НЕ гадали эндпоинты править в коде, все пути и параметры вынесены в
+конфигурационный файл doqa_api_config.json — его можно отредактировать под свою
+инсталляцию, сверив реальные запросы браузера во вкладке DevTools -> Network
+(F12) при работе в веб-интерфейсе DoQA.
+
 Настройки (через переменные окружения или .env):
   DOQA_BASE_URL   - адрес инстанса DoQA, например https://doqa.mycompany.ru
-  DOQA_API_KEY    - API-ключ DoQA (подставляется как параметр apiKey)
+  DOQA_API_KEY    - API-ключ DoQA (способ передачи задаётся в конфиге: query / header)
+  DOQA_VERSION    - версия DoQA, по умолчанию 4.3.1 (пишется в заголовок X-Doqa-Version)
+  DOQA_API_CONFIG - путь к JSON-конфигу эндпоинтов (по умолчанию doqa_api_config.json
+                    рядом со скриптом; если файла нет — создаётся шаблон)
   OPENAI_API_KEY  - ключ ИИ (OpenAI-совместимый API)
   OPENAI_BASE_URL - (опционально) свой base_url, например для локальной модели
   OPENAI_MODEL    - (опционально) имя модели, по умолчанию gpt-4o-mini
@@ -56,26 +69,157 @@ DEFAULT_STATUS_FILTER = ["review"]                         # фильтр по �
 
 DEFAULT_DOQA_BASE_URL = os.getenv("DOQA_BASE_URL", "")
 DOQA_API_KEY = os.getenv("DOQA_API_KEY", "")
+DOQA_VERSION = os.getenv("DOQA_VERSION", "4.3.1")   # целевая версия DoQA: 4.3.1
+
+# ---------------------------------------------------------------------------
+# Конфигурация эндпоинтов DoQA API (версия 4.3.1)
+#
+# ВАЖНО: официальная публичная документация REST API DoQA 4.3.1 в открытых
+# источниках отсутствует (проверено: сайт разработчика dvision.ru недоступен
+# как источник документации). Поэтому пути ниже — типовые предположения,
+# вынесенные В КОНФИГ doqa_api_config.json: точные пути вашего инстанса
+# (F12 -> Network в веб-интерфейсе DoQA) вносятся в этот файл без правки кода.
+# ---------------------------------------------------------------------------
+API_CONFIG_FILE_NAME = "doqa_api_config.json"
+
+DEFAULT_API_CONFIG = {
+    "_comment": (
+        "Конфигурация эндпоинтов DoQA API (версия 4.3.1). Официальная публичная "
+        "документация REST API DoQA отсутствует, поэтому пути являются типовыми. "
+        "Сверьте их с реальными запросами вашего инстанса (браузер: F12 -> Network) "
+        "и при необходимости исправьте значения в этом файле — код менять не нужно."
+    ),
+    "version": DOQA_VERSION,
+    "auth": {
+        # способ передачи API-ключа: "query" (параметр apiKey) или "header"
+        "type": os.getenv("DOQA_AUTH_TYPE", "query"),
+        "param_name": "apiKey",
+        "header_name": "Authorization",
+        "header_prefix": "",          # например "Bearer ", если type=header
+    },
+    "endpoints": {
+        # шаг 1: список проектов (пространств) и их id
+        "projects": {"method": "GET", "path": "/api/project"},
+        # шаг 2: пользователи (создатели кейсов и ответственные)
+        "users": {"method": "GET", "path": "/api/user"},
+        # шаг 4: поиск тест-кейсов по фильтрам
+        "testcase_search": {"method": "POST", "path": "/api/testcase/search"},
+        # получение отдельного тест-кейса по id (режим "--case-ids")
+        "testcase_get": {"method": "GET", "path": "/api/testcase/{id}"},
+    },
+    "fields": {
+        # имена полей тела запроса поиска кейсов (если в вашей версии другие — правьте здесь)
+        "space_id": "spaceId",
+        "statuses": "statuses",
+        "creator_ids": "creatorIds",
+        "updated_from": "updatedDateFrom",
+        "updated_to": "updatedDateTo",
+        "page": "page",
+        "limit": "limit",
+    },
+    "response_list_keys": ["projects", "users", "testCases", "items", "content"],
+}
+
+
+def load_api_config(path: str | None = None) -> dict:
+    """Читает конфигурацию эндпоинтов DoQA из JSON-файла.
+
+    Если файла нет — создаёт шаблон DEFAULT_API_CONFIG и использует его.
+    Недостающие секции/ключи дополняются значениями по умолчанию.
+    """
+    cfg_path = path or os.getenv(
+        "DOQA_API_CONFIG",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), API_CONFIG_FILE_NAME),
+    )
+    config = json.loads(json.dumps(DEFAULT_API_CONFIG))  # глубокая копия
+    if not os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            print(f"[DoQA] Конфиг эндпоинтов не найден — создан шаблон: {cfg_path}")
+        except OSError:
+            print(f"[DoQA] Конфиг эндпоинтов не найден ('{cfg_path}') — "
+                  f"используются пути по умолчанию.")
+        return config
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        user_cfg = json.load(f)
+    for key in ("auth", "endpoints", "fields"):
+        if isinstance(user_cfg.get(key), dict):
+            config[key].update(user_cfg[key])
+    if isinstance(user_cfg.get("response_list_keys"), list):
+        config["response_list_keys"] = user_cfg["response_list_keys"]
+    for key in ("_comment", "version"):
+        if key in user_cfg:
+            config[key] = user_cfg[key]
+    return config
 
 
 # ===========================================================================
 # 1-2. Клиент DoQA
 # ===========================================================================
 class DoQAClient:
-    """Минимальный клиент REST API DoQA."""
+    """Клиент REST API DoQA (целевая версия 4.3.1).
 
-    def __init__(self, base_url: str, api_key: str):
+    Все пути эндпоинтов, имена полей и способ авторизации берутся из
+    конфигурации (doqa_api_config.json), а не зашиты в код, потому что
+    официальная публичная документация API DoQA 4.3.1 отсутствует.
+    """
+
+    def __init__(self, base_url: str, api_key: str, config: dict | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.config = config or load_api_config()
         self.session = requests.Session()
+        # заголовок версии — некоторые инстансы требуют явного указания версии API
+        self.session.headers["X-Doqa-Version"] = str(self.config.get("version", DOQA_VERSION))
 
-    # -- низкоуровневый запрос ----------------------------------------------
-    def _get(self, path: str, params: dict | None = None) -> dict:
+    # -- служебное -----------------------------------------------------------
+    def _endpoint(self, name: str) -> tuple[str, str]:
+        ep = self.config["endpoints"].get(name)
+        if not ep or not ep.get("path"):
+            raise RuntimeError(
+                f"В конфиге эндпоинтов ('{API_CONFIG_FILE_NAME}') не задан endpoint '{name}'."
+            )
+        return str(ep.get("method", "GET")).upper(), ep["path"]
+
+    def _apply_auth(self, params: dict, headers: dict) -> None:
+        auth = self.config.get("auth", {})
+        if not self.api_key:
+            return
+        if auth.get("type", "query") == "header":
+            header_name = auth.get("header_name", "Authorization")
+            prefix = auth.get("header_prefix", "")
+            headers[header_name] = f"{prefix}{self.api_key}"
+        else:
+            params.setdefault(auth.get("param_name", "apiKey"), self.api_key)
+
+    def _request(self, endpoint_name: str, *, path_params: dict | None = None,
+                 params: dict | None = None, json_body: dict | None = None) -> dict:
+        method, path = self._endpoint(endpoint_name)
+        if path_params:
+            path = path.format(**path_params)
         url = f"{self.base_url}{path}"
-        p = dict(params or {})
-        if self.api_key:
-            p.setdefault("apiKey", self.api_key)
-        resp = self.session.get(url, params=p, timeout=60)
+        q = dict(params or {})
+        h: dict = {}
+        self._apply_auth(q, h)
+        if method == "GET":
+            resp = self.session.get(url, params=q, headers=h, timeout=60)
+        else:
+            resp = self.session.request(method, url, params=q, json=json_body,
+                                        headers=h, timeout=120)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"DoQA API error {resp.status_code} при запросе {url}: {resp.text[:500]}"
+            )
+        return resp.json()
+
+    # -- низкоуровневый запрос (обратная совместимость) ----------------------
+    def _get(self, path: str, params: dict | None = None) -> dict:
+        q = dict(params or {})
+        h: dict = {}
+        self._apply_auth(q, h)
+        url = f"{self.base_url}{path}"
+        resp = self.session.get(url, params=q, headers=h, timeout=60)
         if resp.status_code != 200:
             raise RuntimeError(
                 f"DoQA API error {resp.status_code} при запросе {url}: {resp.text[:500]}"
@@ -103,8 +247,12 @@ class DoQAClient:
         return []
 
     # -- шаг 1: список проектов (пространств) и их id ------------------------
+    # Путь эндпоинта берётся из конфига doqa_api_config.json (секция endpoints).
+    # Официальная документация API DoQA 4.3.1 публично недоступна — если запрос
+    # возвращает 404/пустой результат, откройте DevTools (F12 -> Network) в
+    # веб-интерфейсе DoQA, повторите действие и поправьте путь в конфиг-файле.
     def get_projects(self) -> list[dict]:
-        raw = self._extract_items(self._get("/api/project"), "projects")
+        raw = self._extract_items(self._request("projects"), "projects")
         projects = []
         for prj in raw:
             projects.append({
@@ -116,7 +264,7 @@ class DoQAClient:
 
     # -- шаг 2: пользователи (создатели кейсов и ответственные) --------------
     def get_users(self) -> list[dict]:
-        raw = self._extract_items(self._get("/api/user"), "users")
+        raw = self._extract_items(self._request("users"), "users")
         users = []
         for u in raw:
             users.append({
@@ -132,29 +280,27 @@ class DoQAClient:
     # -- шаг 4: поиск тест-кейсов по фильтрам --------------------------------
     def search_test_cases(self, space_id, statuses, creator_ids,
                           updated_after=None, updated_before=None) -> list[dict]:
+        fld = self.config.get("fields", {})
         body = {
-            "spaceId": int(space_id),
-            "statuses": statuses,
-            "creatorIds": [int(c) for c in creator_ids],
+            fld.get("space_id", "spaceId"): int(space_id),
+            fld.get("statuses", "statuses"): statuses,
+            fld.get("creator_ids", "creatorIds"): [int(c) for c in creator_ids],
         }
         if updated_after:
-            body["updatedDateFrom"] = updated_after
+            body[fld.get("updated_from", "updatedDateFrom")] = updated_after
         if updated_before:
-            body["updatedDateTo"] = updated_before
+            body[fld.get("updated_to", "updatedDateTo")] = updated_before
 
-        url = f"{self.base_url}/api/testcase/search"
-        params = {"apiKey": self.api_key} if self.api_key else {}
+        limit_key = fld.get("limit", "limit")
+        page_key = fld.get("page", "page")
         all_cases: list[dict] = []
         page = 1
         while True:
-            params["page"] = page
-            params["limit"] = 100
-            resp = self.session.post(url, params=params, json=body, timeout=120)
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"DoQA API error {resp.status_code} при запросе {url}: {resp.text[:500]}"
-                )
-            items = self._extract_items(resp.json(), "testCases", "items", "content")
+            body[page_key] = page
+            body[limit_key] = 100
+            payload = self._request("testcase_search", json_body=body)
+            items = self._extract_items(payload, *self.config.get(
+                "response_list_keys", ["testCases", "items", "content"]))
             if not items:
                 break
             all_cases.extend(items)
@@ -167,11 +313,12 @@ class DoQAClient:
     def get_test_case(self, case_id) -> dict | None:
         """Возвращает тест-кейс по его id или None, если не найден.
 
-        Пробует типовой REST DoQA: GET /api/testcase/{id}. Если ответ — объект
-        со списком, берётся первый элемент.
+        Эндпоинт берётся из конфига (endpoint "testcase_get", по умолчанию
+        GET /api/testcase/{id}). Если ответ — объект со списком, берётся
+        первый элемент.
         """
         try:
-            payload = self._get(f"/api/testcase/{int(case_id)}")
+            payload = self._request("testcase_get", path_params={"id": int(case_id)})
         except (RuntimeError, requests.RequestException):
             return None
         # Прямой объект кейса
@@ -770,11 +917,23 @@ def make_output_filename(space_name: str, creators: list[dict],
 # Main
 # ===========================================================================
 def main():
+    # Корректный вывод кириллицы в консоли Windows (cmd/PowerShell)
+    if os.name == "nt":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     ap = argparse.ArgumentParser(description="ИИ-ревью тест-кейсов DoQA")
     ap.add_argument("--base-url", default=DEFAULT_DOQA_BASE_URL,
                     help="URL инстанса DoQA (или env DOQA_BASE_URL)")
     ap.add_argument("--api-key", default=DOQA_API_KEY,
                     help="API-ключ DoQA (или env DOQA_API_KEY)")
+    ap.add_argument("--api-config", default=None,
+                    help=f"Путь к JSON-конфигу эндпоинтов DoQA "
+                         f"(по умолчанию {API_CONFIG_FILE_NAME} рядом со скриптом "
+                         f"или env DOQA_API_CONFIG)")
     ap.add_argument("--openai-api-key", default=os.getenv("OPENAI_API_KEY", ""),
                     help="Ключ ИИ (или env OPENAI_API_KEY)")
     ap.add_argument("--openai-base-url", default=os.getenv("OPENAI_BASE_URL", "") or None,
@@ -815,7 +974,10 @@ def main():
         print(f"[OK] Создан файл промта: {prompt_path} (можно отредактировать — "
               f"он перечитывается перед каждым обращением к ИИ)")
 
-    doqa = DoQAClient(args.base_url, args.api_key)
+    api_cfg = load_api_config(args.api_config)
+    print(f"[DoQA] Конфиг эндпоинтов (версия API: {api_cfg.get('version')}): "
+          + ", ".join(f"{k}={v['path']}" for k, v in api_cfg["endpoints"].items()))
+    doqa = DoQAClient(args.base_url, args.api_key, config=api_cfg)
 
     # --- шаг 1: проекты ----------------------------------------------------
     print("\n[1/6] Получение списка проектов (пространств) из DoQA...")

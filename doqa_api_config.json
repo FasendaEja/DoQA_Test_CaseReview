@@ -1,0 +1,26 @@
+{
+  "_comment": "Конфигурация эндпоинтов DoQA API (версия 4.3.1). Официальная публичная документация REST API DoQA отсутствует, поэтому пути являются типовыми. Сверьте их с реальными запросами вашего инстанса (браузер: F12 -> Network) и при необходимости исправьте значения в этом файле — код менять не нужно.",
+  "version": "4.3.1",
+  "auth": {
+    "type": "query",
+    "param_name": "apiKey",
+    "header_name": "Authorization",
+    "header_prefix": ""
+  },
+  "endpoints": {
+    "projects": { "method": "GET", "path": "/api/project" },
+    "users": { "method": "GET", "path": "/api/user" },
+    "testcase_search": { "method": "POST", "path": "/api/testcase/search" },
+    "testcase_get": { "method": "GET", "path": "/api/testcase/{id}" }
+  },
+  "fields": {
+    "space_id": "spaceId",
+    "statuses": "statuses",
+    "creator_ids": "creatorIds",
+    "updated_from": "updatedDateFrom",
+    "updated_to": "updatedDateTo",
+    "page": "page",
+    "limit": "limit"
+  },
+  "response_list_keys": ["projects", "users", "testCases", "items", "content"]
+}

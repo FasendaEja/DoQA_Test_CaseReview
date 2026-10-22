@@ -93,6 +93,25 @@ with mock.patch("builtins.input", lambda prompt="": next(inputs)), \
                                      "--batch-size", "1"]):
     util.main()
 
+# --- проверка конфигурации эндпоинтов DoQA API (doqa_api_config.json) --------
+cfg = util.load_api_config()
+assert cfg["version"] == "4.3.1", cfg["version"]
+assert cfg["endpoints"]["projects"]["path"] == "/api/project"
+assert cfg["endpoints"]["testcase_search"]["method"] == "POST"
+cli = util.DoQAClient("http://x", "KEY", config=cfg)
+assert cli.session.headers.get("X-Doqa-Version") == "4.3.1"
+qp, hh = {}, {}
+cli._apply_auth(qp, hh)
+assert qp == {"apiKey": "KEY"}, qp
+# авторизация через заголовок
+cfg2 = util.load_api_config()
+cfg2["auth"] = {"type": "header", "header_name": "Authorization", "header_prefix": "Bearer "}
+cli2 = util.DoQAClient("http://x", "KEY", config=cfg2)
+qp2, hh2 = {}, {}
+cli2._apply_auth(qp2, hh2)
+assert qp2 == {} and hh2 == {"Authorization": "Bearer KEY"}, (qp2, hh2)
+print("ПРОВЕРКА КОНФИГА ENDPOINT'ОВ (doqa_api_config.json) ПРОЙДЕНА ✅")
+
 # проверка результата (режим по id)
 byid_files = [f for f in os.listdir(".") if f.startswith("Ревью") and "кейсы_101_102" in f]
 assert byid_files, "Не создан файл результата для режима по id!"
