@@ -1,0 +1,8 @@
+
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="e64d03b9-3d64-5627-9646-38a22f1a99c6")}catch(e){}}();
+import{Xc as o,Yb as a,Yc as r,sc as l}from"./chunk-5NWV34XP.js";var d=["mat-internal-form-field",""],m=["*"],g=(()=>{class i{labelPosition;static \u0275fac=function(t){return new(t||i)};static \u0275cmp=a({type:i,selectors:[["div","mat-internal-form-field",""]],hostAttrs:[1,"mdc-form-field","mat-internal-form-field"],hostVars:2,hostBindings:function(t,n){t&2&&l("mdc-form-field--align-end",n.labelPosition==="before")},inputs:{labelPosition:"labelPosition"},attrs:d,ngContentSelectors:m,decls:1,vars:0,template:function(t,n){t&1&&(o(),r(0))},styles:[`.mat-internal-form-field{-moz-osx-font-smoothing:grayscale;-webkit-font-smoothing:antialiased;display:inline-flex;align-items:center;vertical-align:middle}.mat-internal-form-field>label{margin-left:0;margin-right:auto;padding-left:4px;padding-right:0;order:0}[dir=rtl] .mat-internal-form-field>label{margin-left:auto;margin-right:0;padding-left:0;padding-right:4px}.mdc-form-field--align-end>label{margin-left:auto;margin-right:0;padding-left:0;padding-right:4px;order:-1}[dir=rtl] .mdc-form-field--align-end .mdc-form-field--align-end label{margin-left:0;margin-right:auto;padding-left:4px;padding-right:0}
+`],encapsulation:2,changeDetection:0})}return i})();export{g as a};
+/**i18n:2679c7a8d3bece6d756b211e9e9005dcae23582a5802ad1a8ada3e355c32efef*/
+//# 
+
+//# debugId=e64d03b9-3d64-5627-9646-38a22f1a99c6
