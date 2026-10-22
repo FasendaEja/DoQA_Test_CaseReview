@@ -1,0 +1,188 @@
+Metadata-Version: 2.4
+Name: doqa-client
+Version: 0.1.5
+Summary: DoQA client core: config resolution, Direct Autotest API client and Allure-compatible file sink
+Author-email: DoQA team <support@doqa.app>
+License: Apache-2.0
+Project-URL: Homepage, https://doqa.app
+Project-URL: Repository, https://github.com/doqa-app/doqa-python
+Project-URL: Issues, https://github.com/doqa-app/doqa-python/issues
+Keywords: doqa,testing,reporting,autotests
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development :: Testing
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
+# doqa-client: пакет `doqa` для Python-адаптеров DoQA
+
+`doqa-client` содержит код Python-адаптеров DoQA, который не зависит от тестового фреймворка. На нём
+работает плагин [`doqa-pytest`](../doqa-pytest/README.md). Дистрибутив устанавливает пакет `doqa`
+целиком:
+
+- `doqa`: пользовательский API для разметки тестов (`import doqa`);
+- `doqa.core`: общая часть адаптеров (контексты тестов, шаги, вычисление идентификатора, сессия
+  отправки);
+- `doqa.client`: клиент DoQA Autotest API и запись результатов в файлы.
+
+Внешних зависимостей во время выполнения у пакета нет: HTTP-запросы выполняются через `http.client`,
+JSON обрабатывается модулем `json`. Посторонние пакеты в окружение проекта он не добавляет.
+
+## Требования
+
+- Python 3.9 или новее.
+
+## Установка
+
+```bash
+pip install doqa-client
+```
+
+Обычно этот пакет напрямую не нужен: установите адаптер своего фреймворка
+(`pip install doqa-pytest`), он установит `doqa-client` той же версии.
+
+## Пользовательский API `doqa`
+
+Функции для разметки тестов находятся в этом пакете и одинаковы во всех адаптерах DoQA, поэтому при
+смене фреймворка импорты менять не нужно:
+
+- декораторы разметки: `doqa.id`, `doqa.title`, `doqa.description`, `doqa.display_name`,
+  `doqa.label`, `doqa.tag`, `doqa.link` (и сокращения `doqa.link.defect` и другие),
+  `doqa.case_ids`, `doqa.namespace`, `doqa.class_name`, `doqa.create_manual_case`;
+- шаги: `doqa.step` работает как контекстный менеджер и как декоратор, поддерживает плейсхолдеры
+  `{param}`;
+- вызовы во время выполнения: `doqa.add_*`, `doqa.attach`, `doqa.attach_file`,
+  `doqa.capture_context` / `doqa.run_with` для потоков, которые создаёт тест.
+
+Вне выполняющегося теста эти функции ничего не делают. Примеры приведены в
+[README плагина](../doqa-pytest/README.md).
+
+## Настройки
+
+Настройки собираются из трёх источников. По убыванию приоритета: **настройки адаптера (в pytest это
+опции `--doqa-*` и ini-ключи), переменные окружения `DOQA_*`, файл `doqa.properties`**. Файл ищется
+в рабочей директории или по пути из `DOQA_CONFIG` / ключа адаптера `doqa.config`. Общая часть не
+знает о конкретном фреймворке: адаптер передаёт ей свои настройки словарём с ключами `doqa.<поле>`.
+
+Поля: `url`, `token`, `spaceId`, `configurationId`, `testRunId`, `testRunName`, `adapterMode`,
+`importRealtime`, `certValidation`, `proxy`, `reporting`, `resultsDir`, `environment`, `pipelineId`,
+`ciRunId`, `sourceKey`, `correlationId`, `branch`, `batchSize`, `requestTimeoutMs`, `retries`,
+`retryBackoffMs`, `maxTraceLength`, `maxMessageLength`, `maxParameterLength`. Таблица со значениями по умолчанию и назначением полей
+приведена в [README плагина](../doqa-pytest/README.md#полная-конфигурация).
+
+`pipelineId` и `branch` по умолчанию берутся из переменных CI GitLab, GitHub Actions, Jenkins и
+TeamCity. Пустые
+переменные окружения не учитываются, а явно пустое значение настройки адаптера сбрасывает значение
+из переменных окружения и файла.
+
+Файл `doqa.properties` читается в UTF-8. Каждая строка имеет вид `ключ=значение`, строки с `#` или
+`!` в начале считаются комментариями.
+
+### Отправка и повторы
+
+GET-запросы и создание прогона с идемпотентным ключом повторяются при ответах 5xx и сетевых
+ошибках, любой запрос повторяется при ответе 429. Остальные POST-запросы при ответе 5xx не
+повторяются, а при сетевой ошибке повторяются только в случае, когда соединение не установилось:
+если ответ потерян, повтор мог бы создать дубликат прогона или результата.
+
+После 5 запросов подряд, завершившихся ошибкой, клиент 30 секунд не обращается к DoQA и сразу
+завершает запросы ошибкой, затем делает одну пробную попытку. Так недоступный сервер не тратит
+`retries × timeout` на каждый вызов. Токен в сообщения об ошибках не попадает.
+
+Если прогон не удалось установить (DoQA не отвечает, отклоняет токен или не создаёт прогон,
+например, с ответами 401, 403, 422), адаптер пишет результаты всего прогона в файлы и выводит
+WARNING с причиной. Если DoQA отклонил пакет результатов уже установленного прогона, в файлы
+пишется только этот пакет, остальные адаптер продолжает отправлять через API. В `resultsDir` при
+этом лежит файл `doqa-reporting.properties` с полями `sink=api|files`, `runId`, `delivered`,
+`fallbackResults`. По нему шаг загрузки в пайплайне определяет, остались ли результаты для
+загрузки, а `doqactl upload` берёт из него CI-контекст, чтобы найти прогон.
+
+## Использование клиента
+
+Основные классы:
+
+```python
+from doqa.client.api import ApiClient
+from doqa.client.config import DoqaConfig
+from doqa.client.models import AutotestDef, AutotestResult, Step
+from doqa.client.run_context import RunContext
+
+config = DoqaConfig.resolve()
+client = ApiClient(config)
+run = RunContext.establish(client, config)
+
+definition = AutotestDef("LOGIN-1", "Login works")
+definition.title = "Login"
+definition.steps.append(Step.of("open the login page"))
+client.upsert_autotests([definition])
+
+result = AutotestResult("LOGIN-1", "passed")
+result.started_on, result.completed_on = start_ms, stop_ms
+result.duration_ms = stop_ms - start_ms
+client.upload_results(run.run_id, run.configuration_id, [result])
+```
+
+Вложения загружаются до отправки результатов, а в результате указываются через
+`Attachment(media_file_id)`. `client.upload_attachment(path)` передаёт файл с диска потоком, не
+загружая его целиком в память, поэтому подходит для больших видео.
+`client.upload_attachment_bytes(filename, content, content_type)` загружает данные из памяти.
+Content-type multipart-части определяется по имени файла.
+
+Для файлового режима `AllureFileWriter` записывает ту же модель `AutotestDef`/`AutotestResult` в
+файлы `*-result.json` и `*-container.json`, которые принимает парсер DoQA. Если задан ключ
+`environment`, он также записывает `environment.properties`.
+
+HTTP-транспорт задаётся классом `Transport`. В тестах и адаптерах вместо него можно подставить свою
+реализацию и работать без сети.
+
+## Как написать адаптер
+
+Адаптер фреймворка отвечает за четыре задачи.
+
+1. **Имя фреймворка.** Вызовите `AdapterRuntime.configure("<framework>", "<label>")` в точке входа
+   адаптера. Первый аргумент становится префиксом вычисляемого `externalId`, второй записывается в
+   результаты файлового режима.
+2. **Жизненный цикл теста.** При старте теста вызовите `DoqaContexts.open(unique_id)` и заполните
+   `RuntimeContext.test_ref`. Создавайте `TestRef` в одной фабрике на адаптер, чтобы discovery,
+   сортировка и отправка вычисляли одинаковые идентификаторы. При завершении теста вызовите
+   `DoqaContexts.remove(...)`, соберите результат через `result_builder.build(...)` и передайте его
+   в `session.report(built)`.
+3. **Точки отправки.** Вызывайте `session.flush_class(fqcn)` при завершении контейнера (режим
+   realtime) и `session.flush()` в конце прогона. Ошибки отправки не должны прерывать прогон
+   тестов.
+4. **Отбор и порядок (необязательно).** Если фреймворк позволяет вмешаться в сбор тестов,
+   используйте `plan.allows(ref)` для исключения тестов, `plan.plan_index(ref)` как ключ сортировки
+   и `plan.reset()` в конце прогона.
+
+Адаптеру BDD-фреймворка разметка приходит не из декораторов, а из тегов `.feature`. Модуль
+`doqa.core.gherkin_tags` разбирает теги DoQA (`@doqa.id:`, `@DOQA-<n>`, `@allure.id:`,
+`@doqa.case:`) по уровням сценария, Rule и Feature и возвращает `ExternalMarkup`. Положите его в
+`TestRef.markup`: каскад идентификатора учтёт эти значения после декораторов, а имя сценария станет
+именем автотеста, если явного имени нет. Шаг, у которого в описании автотеста другой заголовок
+(шаблон шага Scenario Outline), получает его в `StepNode.definition_title`.
+
+По этой схеме реализован плагин `doqa-pytest`, включая поддержку pytest-bdd.
+
+## Сборка
+
+Модуль находится в монорепозитории `doqa-python`:
+
+```bash
+pip install -e ./doqa-client
+python -m pytest doqa-client/tests
+```
+
+Тесты проверяют клиент с фиктивной реализацией `Transport`, доступ в сеть не нужен.
+
+## Лицензия
+
+[Apache License 2.0](../LICENSE)

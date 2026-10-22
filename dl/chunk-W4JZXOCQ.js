@@ -1,0 +1,8 @@
+
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="0ef3ee69-75fa-51eb-bb53-71657a3ba481")}catch(e){}}();
+import{m as C,z as _}from"./chunk-WPGWTQST.js";import{Dc as m,Eb as a,Ec as s,Ed as u,Fc as i,Gc as p,Hc as l,Ib as r,Wc as d,Yb as c,cc as g,fd as f,qc as o}from"./chunk-5NWV34XP.js";function y(e,x){if(e&1&&(p(0),i(1,"img",2),l()),e&2){let n=d();r(),o("src",n.image,a)}}function M(e,x){e&1&&(m(0,"div",3),i(1,"img",4),s())}var I=(()=>{class e{constructor(){this.image="assets/doqa.svg"}static{this.\u0275fac=function(t){return new(t||e)}}static{this.\u0275cmp=c({type:e,selectors:[["doqa-project-logo"]],inputs:{image:"image"},decls:3,vars:2,consts:[["initial",""],[4,"ngIf","ngIfElse"],["alt","",1,"image",3,"src"],[1,"image","image-default"],["alt","Logo","src","assets/doqa.svg"]],template:function(t,h){if(t&1&&g(0,y,2,1,"ng-container",1)(1,M,2,0,"ng-template",null,0,u),t&2){let v=f(2);o("ngIf",h.image)("ngIfElse",v)}},dependencies:[_,C],styles:[`.image[_ngcontent-%COMP%]{border-radius:5px;box-sizing:border-box;height:100%;object-fit:cover;width:100%}.image-default[_ngcontent-%COMP%]{border:1px solid var(--gray-stroke);padding:5px}.image-default[_ngcontent-%COMP%]   img[_ngcontent-%COMP%]{height:100%;width:100%}
+/*# sourceMappingURL=project-logo.component-XJSCGW5C.css.map */`],changeDetection:0})}}return e})();export{I as a};
+/**i18n:2679c7a8d3bece6d756b211e9e9005dcae23582a5802ad1a8ada3e355c32efef*/
+//# 
+
+//# debugId=0ef3ee69-75fa-51eb-bb53-71657a3ba481
